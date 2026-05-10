@@ -1,0 +1,18 @@
+[project]
+name = "after-image"
+version = "0.1.0"
+description = "Afterimage rendering with YOLO + ByteTrack"
+requires-python = ">=3.13"
+dependencies = [
+    "opencv-python",
+    "ultralytics",
+    "numpy",
+    "python-dotenv",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
