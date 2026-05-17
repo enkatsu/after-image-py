@@ -1,11 +1,12 @@
+import os
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
 
-BUFFER_LENGTH = 5
-MAX_PEOPLE = 5
+BUFFER_LENGTH = int(os.environ.get('BUFFER_LENGTH', '5'))
+MAX_PEOPLE = int(os.environ.get('MAX_PEOPLE', '5'))
 
 
 @dataclass

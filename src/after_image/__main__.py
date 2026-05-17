@@ -1,23 +1,26 @@
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+load_dotenv(PROJECT_ROOT / '.env')
+
 import cv2
 import numpy as np
-from dotenv import load_dotenv
 from ultralytics import YOLO
 
 from .debug import annotate, list_cameras, render_buffer_grid
 from .effects import RENDERERS
 from .tracker import SHOULD_RECORD, TrackManager
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-load_dotenv(PROJECT_ROOT / '.env')
-
 PERSON_CLASS_ID = 0
-CAMERA_INDEX = 1
-FRAME_WIDTH = 1280
-FRAME_HEIGHT = 720
-MODEL_PATH = str(PROJECT_ROOT / 'models' / 'yolov8n.pt')
+CAMERA_INDEX = int(os.environ.get('CAMERA_INDEX', '1'))
+FRAME_WIDTH = int(os.environ.get('FRAME_WIDTH', '1280'))
+FRAME_HEIGHT = int(os.environ.get('FRAME_HEIGHT', '720'))
+MODEL_PATH = os.environ.get(
+    'MODEL_PATH', str(PROJECT_ROOT / 'models' / 'yolov8n.pt')
+)
 
 render = RENDERERS[os.environ.get('EFFECT', 'plotter')]
 should_record = SHOULD_RECORD[os.environ.get('TRIGGER', 'distance')]
