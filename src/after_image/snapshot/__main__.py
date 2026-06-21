@@ -3,16 +3,16 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 load_dotenv(PROJECT_ROOT / '.env')
 
 import cv2
 import numpy as np
 from ultralytics import YOLO
 
+from ..effects import RENDERERS
+from ..tracker import SHOULD_RECORD, TrackManager
 from .debug import annotate, list_cameras, render_buffer_grid
-from .effects import RENDERERS
-from .tracker import SHOULD_RECORD, TrackManager
 
 PERSON_CLASS_ID = 0
 CAMERA_INDEX = int(os.environ.get('CAMERA_INDEX', '1'))

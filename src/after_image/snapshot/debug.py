@@ -3,7 +3,7 @@ from collections.abc import Iterable
 import cv2
 import numpy as np
 
-from .tracker import BUFFER_LENGTH, MAX_PEOPLE, Track, TrackManager
+from ..tracker import BUFFER_LENGTH, MAX_PEOPLE, Track, TrackManager
 
 
 def annotate(

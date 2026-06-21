@@ -3,120 +3,193 @@
 森山祥太郎, 遠藤勝也
 
 Processing 版 [Afterimage](../Afterimage) の Python 移植・拡張。
-カメラに映った人物を YOLO + ByteTrack で追跡し、各人物が一定距離以上動いたタイミングでフレーム全体を記録、過去のスナップショットを多重露光や線画として現在フレームに重ねて残像表現を生成する。
-同時に最大 5 人まで保持し、6 人目が記録された時点で最も古く登場した人物の残像をバッファから破棄する。
+カメラに映った人物を YOLO + ByteTrack で検出し、3 種類の表現で残像を作る。
+
+## モード
+
+| モード | コマンド | 入力単位 | 表現 |
+| --- | --- | --- | --- |
+| `snapshot` | `python -m after_image.snapshot` | 1 人につき 5 枚の静止画 | 各人物の過去フレームを毎フレーム合成。距離トリガで記録 |
+| `datamosh` | `python -m after_image.datamosh` | シーン単位の mp4 を最大 5 本 | クリップを結合してデータモッシュ（I-frame 除去 / P-frame 複製） |
+| `multiclip` | `python -m after_image.multiclip` | シーン単位の mp4 を最大 5 本 | 5 本を並列ループ再生して多重露光合成（多人数の残像が同時に画面に存在） |
+
+`snapshot` は人物単位、`datamosh` と `multiclip` はシーン単位で素材を蓄積する。
+`datamosh` と `multiclip` は同じ録画機構（`SceneRecorder`）を共有するため、`clips/` ディレクトリの mp4 を相互に流用できる。
 
 ## ファイル構成
 
 ```
 after-image-py/
-├── pyproject.toml             # パッケージ定義
+├── pyproject.toml
 ├── requirements.txt
+├── .env / .env.example
 ├── README.md
-├── .env / .env.example        # 環境変数による実行時設定
+├── LICENSES/
+│   └── datamoshing-UNLICENSE.txt   # mosh.py 由来のアトリビューション
 ├── models/
-│   └── yolov8n.pt             # 初回起動時に自動ダウンロード
-└── src/
-    └── after_image/
-        ├── __init__.py
-        ├── __main__.py        # エントリ。`python -m after_image` で実行
-        ├── tracker.py         # Track / TrackManager / SHOULD_RECORD
-        ├── effects.py         # RENDERERS と各実装、線画化ヘルパ
-        └── debug.py           # annotate / render_buffer_grid / list_cameras
+│   └── yolov8n.pt                  # 初回起動時に自動ダウンロード
+├── clips/                          # datamosh/multiclip が録画したシーン mp4（FIFO）
+├── moshed/                         # datamosh が生成したデータモッシュ済 mp4（FIFO）
+└── src/after_image/
+    ├── recorder.py                 # 【共通】SceneRecorder
+    ├── tracker.py                  # 【共通】Track / TrackManager / SHOULD_RECORD
+    ├── effects.py                  # 【共通】RENDERERS (multi / sketch / plotter)
+    ├── snapshot/                   # 静止画スナップショット合成版
+    │   ├── __main__.py
+    │   └── debug.py
+    ├── datamosh/                   # データモッシュ版
+    │   ├── __main__.py
+    │   ├── mosh.py                 # I-frame 除去 / P-frame 複製の実装
+    │   ├── pipeline.py             # concat + mosh ラッパー
+    │   ├── player.py               # 完成 mp4 のループ再生
+    │   └── worker.py               # 別スレッドで mosh 生成（latest-wins）
+    └── multiclip/                  # 多重露光動画版
+        ├── __main__.py
+        └── player.py               # 並列再生 + shim track 生成
 ```
 
-## 動作
+## snapshot モード
 
-1. カメラフレームを取得し、YOLOv8 の `model.track(persist=True)` で人物クラスのみを検出・ID 付け（ByteTrack）。
-2. 検出された各人物について bbox 中心を計算し、前回記録時の中心から閾値以上動いていれば（または初検出なら）現在のフレーム全体を `(frame_count, frame)` のタプルとしてその人物のバッファに追加。
-3. 各人物のバッファは `BUFFER_LENGTH` の固定長 deque。新しいフレームが入ると最古のフレームが押し出される。
-4. 新規 ID の登録時に総人数が `MAX_PEOPLE` を超えたら、最も古く登録された人物（`people[0]`）を丸ごと破棄。
-5. 全人物のバッファを統合して `frame_count` で重複排除し、選択中のエフェクト関数で合成して描画。
+1. カメラフレームを取得し、YOLOv8 の `model.track(persist=True)` で人物のみ検出・ID 付け。
+2. 各人物について bbox 中心が前回記録時から閾値以上動いていればフレーム全体を `(frame_count, frame)` でバッファに追加。
+3. 各人物のバッファは `BUFFER_LENGTH` 長の固定 deque。
+4. 新規 ID 登録時に総人数が `MAX_PEOPLE` を超えたら、最古の人物を破棄。
+5. 全人物のバッファを統合して `EFFECT` で合成し描画。
 
-## データ構造
-
-```
-TrackManager
-└── people: list[Track]                              # 登場順（古い → 新しい）
-     └── Track
-          ├── id: int                                # ByteTrack の追跡 ID
-          ├── last_center: (cx, cy)                  # 前回記録時の bbox 中心
-          └── frames: deque[(frame_count, ndarray)]  # 最新 BUFFER_LENGTH 枚
-```
-
-## エフェクト
-
-`EFFECT` 環境変数で実行時に切替可能。
+エフェクト切替（`EFFECT` 環境変数）：
 
 | キー | 関数 | 概要 |
 | --- | --- | --- |
-| `multi` | `multiple_exposure` | 多重露光。全レイヤーを半透明で積層しフィルム調 |
+| `multi` | `multiple_exposure` | 多重露光。全レイヤーを半透明積層しフィルム調 |
 | `sketch` | `sketch_overlay` | 鉛筆画調。Sobel 線画を MULTIPLY で階調積層 |
-| `plotter` | `plotter_overlay` | プロッター調。Canny で 1 px 二値線画にして積層（既定） |
+| `plotter` | `plotter_overlay` | プロッター調。Canny で 1 px 二値線画積層（既定） |
 
-## 記録条件
+記録条件切替（`TRIGGER` 環境変数）：
 
-`TRIGGER` 環境変数で実行時に切替可能。
+| キー | 概要 |
+| --- | --- |
+| `distance` | 前回記録時から閾値（既定 80 px）以上動いたら記録（既定） |
+| `always` | 検出フレームすべてを記録 |
 
-| キー | 取得元 | 概要 |
+`DEBUG=1` で bbox / バッファサムネイル / カメラ列挙が有効。
+
+## datamosh モード
+
+シーン単位で mp4 を録画してストックし、データモッシュ済み mp4 を生成・ループ再生する。
+
+### 状態遷移
+
+```
+LIVE          ──[初回 mosh 完成]──▶  MOSHED_PLAYING
+MOSHED_PLAYING ──[新 mosh 完成]──▶  MOSHED_PLAYING（次ループ頭で差し替え）
+```
+
+- 起動直後はクリップが無いのでライブビュー表示
+- 録画は常時稼働（再生状態に関係なく）
+- 一度 MOSHED に入ったらライブには戻らない
+
+### 録画
+
+`recorder.SceneRecorder` が以下を満たすシーンを mp4 として書き出す：
+
+- 検出が始まったらフレームを記録開始
+- 検出ゼロが `SCENE_END_SILENCE_FRAMES` 連続したらシーン終了
+- 1 シーンが `SCENE_MAX_SECONDS` 秒を超えたら強制終了して次のシーンへ
+- `SCENE_MIN_FRAMES` 未満のシーンは破棄
+- `MAX_STOCK` 本を超えたら最古のクリップを物理削除（FIFO）
+
+### 生成パイプライン
+
+`MOSH_DELTA` で 2 つのモードを切替：
+
+- **`MOSH_DELTA=0`（I-frame 除去 / 既定）**：全クリップを `ffmpeg concat` で結合し、2 本目以降の I-frame を一括削除。シーン境目で前クリップの絵が後クリップの動きベクトルで歪んで溶ける。
+- **`MOSH_DELTA=N`（P-frame 複製 / N > 0）**：各クリップを個別に N フレーム delta mosh してから結合。各シーン冒頭の N フレーム分の動きがそのシーン内で繰り返し再生される（動きの軌跡が滲み続ける）。
+
+mosh.py の本体は [tiberiuiancu/datamoshing](https://github.com/tiberiuiancu/datamoshing) のフォーク。詳細は [`LICENSES/datamoshing-UNLICENSE.txt`](LICENSES/datamoshing-UNLICENSE.txt) を参照。
+
+### バックグラウンド生成
+
+`worker.MoshWorker` がデーモンスレッドで `build_moshed()` を実行する。
+生成中に新規 request が来た場合は **latest-wins** で最新のストックだけ覚えておき、終わり次第続けて処理する。完成 mp4 のパスは `MoshedPlayer.update_source()` を経由して次のループ頭で差し替え。`moshed/` には最新 `keep_recent` 本（既定 3）だけ残し、古いものは worker が削除する。
+
+### 手動生成（CLI）
+
+```sh
+# 既存の clips/*.mp4 で moshed/moshed.mp4 を生成（録画ループは走らない）
+.venv/bin/python -m after_image.datamosh.pipeline
+MOSH_DELTA=5 .venv/bin/python -m after_image.datamosh.pipeline
+```
+
+## multiclip モード
+
+ストックされている mp4 を **すべて並列にループ再生** し、毎フレーム各クリップから 1 フレームずつ取り出して既存の `RENDERERS` で合成する。datamosh と違って絵が複数枚同時に画面に存在するので、**複数人の残像が同時に動く**表現になる。
+
+エフェクトは `EFFECT=multi`（既定） / `sketch` / `plotter`。snapshot と同じ `RENDERERS` を流用しているため、見た目の傾向もそれに準ずる。
+
+各クリップは異なる長さでループするので、再生位相が次第にズレて新鮮味が出る。
+
+## 共通の仕組み
+
+### 人物検出
+
+3 モードとも YOLOv8 + ByteTrack を使用。`PERSON_CLASS_ID=0`（COCO の `person`）のみ検出対象にしている。
+
+### 環境変数
+
+`.env` または `.env.example` を参照。主なもの：
+
+| 名前 | 既定値 | 用途 |
 | --- | --- | --- |
-| `distance` | `make_should_record_by_distance()` | 前回記録時から閾値（既定 80 px）以上動いたら記録（既定） |
-| `always` | `should_record_always` | 検出フレームすべてを記録 |
-
-`should_record(track, cx, cy) -> bool` のシグネチャを満たせば独自関数を `tracker.SHOULD_RECORD` に追加できる。
-
-## デバッグモード
-
-`DEBUG=1` を `.env` またはシェルで設定すると以下が有効になる。`1` / `true` / `yes` のみが真値として扱われ、`0` や空は偽。
-
-- メインウィンドウ上の bbox + ID + バッファ枚数表示 (`annotate`)
-- バッファ一覧の別ウィンドウ表示 (`render_buffer_grid`)
-- 起動時のカメラインデックス利用可否の列挙 (`list_cameras`)
-
-## パラメータ
-
-| 名前 | 既定値 | 場所 | 説明 |
-| --- | --- | --- | --- |
-| `PERSON_CLASS_ID` | `0` | `__main__.py` | YOLO の人物クラス ID（COCO の `person`） |
-| `CAMERA_INDEX` | `1` | `__main__.py` | `cv2.VideoCapture` のデバイスインデックス |
-| `FRAME_WIDTH` / `FRAME_HEIGHT` | `1280` / `720` | `__main__.py` | キャプチャ解像度 |
-| `MODEL_PATH` | `<PROJECT_ROOT>/models/yolov8n.pt` | `__main__.py` | YOLO モデルファイルの絶対パス |
-| `BUFFER_LENGTH` | `5` | `tracker.py` | 1 人あたりに保持する残像フレーム数 |
-| `MAX_PEOPLE` | `5` | `tracker.py` | 同時追跡できる人物数の上限 |
-| `threshold` | `80` | `make_should_record_by_distance` 引数 | 距離トリガの閾値（ピクセル） |
-| `current_alpha` | `0.1` | `multiple_exposure` 引数 | 現在フレームを残像の上に重ねる際の不透明度 |
-| `thumb_width` / `thumb_height` | `240` / `135` | `render_buffer_grid` 引数 | デバッグサムネイルのサイズ |
+| `CAMERA_INDEX` | `1` | `cv2.VideoCapture` のデバイス番号 |
+| `FRAME_WIDTH` / `FRAME_HEIGHT` | `1280` / `720` | キャプチャ解像度 |
+| `MODEL_PATH` | `models/yolov8n.pt` | YOLO モデルファイル |
+| `DEBUG` | 空 | `1` / `true` / `yes` でデバッグ表示有効 |
+| `EFFECT` | `plotter` (snapshot) / `multi` (multiclip) | 合成エフェクト |
+| `TRIGGER` | `distance` | snapshot の記録条件 |
+| `BUFFER_LENGTH` | `5` | snapshot の 1 人あたり残像枚数 |
+| `MAX_PEOPLE` | `5` | snapshot の同時追跡人数上限 |
+| `CLIPS_DIR` | `clips` | datamosh/multiclip のクリップ出力先 |
+| `MOSHED_DIR` | `moshed` | datamosh の moshed mp4 出力先 |
+| `MAX_STOCK` | `5` | datamosh/multiclip のストック上限 |
+| `SCENE_MAX_SECONDS` | `5.0` | 1 シーンの最大長 |
+| `SCENE_END_SILENCE_FRAMES` | `15` | 何フレーム無検出でシーン終了とみなすか |
+| `SCENE_MIN_FRAMES` | `30` | これ未満のシーンは破棄 |
+| `MOSHED_FPS` | `30` | datamosh 出力 fps |
+| `MOSH_DELTA` | `0` | 0 = I-frame 除去、>0 = P-frame 複製 |
 
 ## セットアップ
 
-Python 3.13 を想定。
+Python 3.13 を想定。`ffmpeg` / `ffprobe` が PATH に通っている必要がある（datamosh モードのみ）。
 
 ```sh
 python3.13 -m venv .venv
-.venv/bin/pip install -e .       # editable install で `after_image` パッケージを登録
+.venv/bin/pip install -e .
 cp .env.example .env             # 必要に応じて編集
 ```
 
 初回起動時に `models/yolov8n.pt`（約 6 MB）が自動ダウンロードされる。
-`requirements.txt` も用意してあるが、依存定義は `pyproject.toml` 側が単一ソース。
 
 ## 実行
 
 ```sh
-.venv/bin/python -m after_image
+# snapshot（静止画スナップショット合成）
+.venv/bin/python -m after_image.snapshot
+EFFECT=sketch DEBUG=1 .venv/bin/python -m after_image.snapshot
+
+# datamosh（I-frame 除去）
+.venv/bin/python -m after_image.datamosh
+MOSH_DELTA=5 .venv/bin/python -m after_image.datamosh   # P-frame 複製
+
+# multiclip（多重露光動画版）
+.venv/bin/python -m after_image.multiclip
+EFFECT=plotter .venv/bin/python -m after_image.multiclip
 ```
 
-`q` または `Esc` で終了。
-
-環境変数で動作を切替：
-
-```sh
-EFFECT=sketch DEBUG=1 .venv/bin/python -m after_image
-EFFECT=multi TRIGGER=always .venv/bin/python -m after_image
-```
+いずれも `q` または `Esc` で終了。
 
 ## 参考
 
 - [../Afterimage](../Afterimage) — Processing による元実装
 - [ultralytics/ultralytics](https://github.com/ultralytics/ultralytics) — YOLO + ByteTrack
+- [tiberiuiancu/datamoshing](https://github.com/tiberiuiancu/datamoshing) — `mosh.py` のフォーク元（Unlicense）
 - [theskumar/python-dotenv](https://github.com/theskumar/python-dotenv) — `.env` サポート

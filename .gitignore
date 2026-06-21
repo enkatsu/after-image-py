@@ -6,6 +6,13 @@ __pycache__/
 
 models/*.pt
 
+clips/
+moshed/
+
 build/
 dist/
 *.egg-info/
+
+.DS_Store
+
+
