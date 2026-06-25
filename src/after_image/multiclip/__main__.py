@@ -90,6 +90,7 @@ def main():
             cv2.WINDOW_FULLSCREEN,
         )
 
+    first_frame = True
     try:
         while True:
             ok, frame = cap.read()
@@ -126,6 +127,15 @@ def main():
                 draw_debug(display, recorder, player, fps)
 
             cv2.imshow('after-image-multiclip', display)
+            if not DEBUG and first_frame:
+                # 一部の highgui backend は最初の描画前だと
+                # WND_PROP_FULLSCREEN を無視するため、ここで再設定する。
+                cv2.setWindowProperty(
+                    'after-image-multiclip',
+                    cv2.WND_PROP_FULLSCREEN,
+                    cv2.WINDOW_FULLSCREEN,
+                )
+                first_frame = False
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q') or key == 27:
                 break

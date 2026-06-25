@@ -78,6 +78,12 @@ def main():
             cv2.imshow('buffer', render_buffer_grid(manager))
 
         cv2.imshow('after-image-py', display)
+        if not DEBUG and frame_count == 1:
+            # Some highgui backends (Raspberry Pi 等) ignore WND_PROP_FULLSCREEN
+            # until the window has rendered its first frame. Re-assert it here.
+            cv2.setWindowProperty(
+                'after-image-py', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN
+            )
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q') or key == 27:
             break
