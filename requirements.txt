@@ -1,4 +1,6 @@
-opencv-python
+opencv-python==4.12.0.88
 ultralytics
+ncnn
+lap
 numpy
 python-dotenv

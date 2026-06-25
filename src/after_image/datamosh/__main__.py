@@ -9,6 +9,7 @@ load_dotenv(PROJECT_ROOT / '.env')
 import cv2
 from ultralytics import YOLO
 
+from ..model import default_model_path
 from ..recorder import SceneRecorder
 from .player import MoshedPlayer
 from .worker import MoshWorker
@@ -17,9 +18,7 @@ PERSON_CLASS_ID = 0
 CAMERA_INDEX = int(os.environ.get('CAMERA_INDEX', '1'))
 FRAME_WIDTH = int(os.environ.get('FRAME_WIDTH', '1280'))
 FRAME_HEIGHT = int(os.environ.get('FRAME_HEIGHT', '720'))
-MODEL_PATH = os.environ.get(
-    'MODEL_PATH', str(PROJECT_ROOT / 'models' / 'yolov8n.pt')
-)
+MODEL_PATH = os.environ.get('MODEL_PATH', default_model_path(PROJECT_ROOT))
 CLIPS_DIR = Path(os.environ.get('CLIPS_DIR', str(PROJECT_ROOT / 'clips')))
 MOSHED_DIR = Path(os.environ.get('MOSHED_DIR', str(PROJECT_ROOT / 'moshed')))
 
@@ -56,7 +55,7 @@ def draw_debug(
 
 
 def main():
-    model = YOLO(MODEL_PATH)
+    model = YOLO(MODEL_PATH, task='detect')
     cap = cv2.VideoCapture(CAMERA_INDEX)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)

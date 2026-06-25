@@ -11,6 +11,7 @@ import numpy as np
 from ultralytics import YOLO
 
 from ..effects import RENDERERS
+from ..model import default_model_path
 from ..tracker import SHOULD_RECORD, TrackManager
 from .debug import annotate, list_cameras, render_buffer_grid
 
@@ -18,9 +19,7 @@ PERSON_CLASS_ID = 0
 CAMERA_INDEX = int(os.environ.get('CAMERA_INDEX', '1'))
 FRAME_WIDTH = int(os.environ.get('FRAME_WIDTH', '1280'))
 FRAME_HEIGHT = int(os.environ.get('FRAME_HEIGHT', '720'))
-MODEL_PATH = os.environ.get(
-    'MODEL_PATH', str(PROJECT_ROOT / 'models' / 'yolov8n.pt')
-)
+MODEL_PATH = os.environ.get('MODEL_PATH', default_model_path(PROJECT_ROOT))
 
 render = RENDERERS[os.environ.get('EFFECT', 'plotter')]
 should_record = SHOULD_RECORD[os.environ.get('TRIGGER', 'distance')]
@@ -39,7 +38,7 @@ def main():
     if DEBUG:
         list_cameras()
 
-    model = YOLO(MODEL_PATH)
+    model = YOLO(MODEL_PATH, task='detect')
     cap = cv2.VideoCapture(CAMERA_INDEX)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)

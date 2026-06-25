@@ -27,7 +27,8 @@ after-image-py/
 ├── LICENSES/
 │   └── datamoshing-UNLICENSE.txt   # mosh.py 由来のアトリビューション
 ├── models/
-│   └── yolov8n.pt                  # 初回起動時に自動ダウンロード
+│   ├── yolov8n.pt                  # 初回起動時に自動ダウンロード（torch バックエンド）
+│   └── yolov8n_ncnn_model/         # NCNN エクスポート済みモデル（既定で優先利用）
 ├── clips/                          # datamosh/multiclip が録画したシーン mp4（FIFO）
 ├── moshed/                         # datamosh が生成したデータモッシュ済 mp4（FIFO）
 └── src/after_image/
@@ -142,7 +143,7 @@ MOSH_DELTA=5 .venv/bin/python -m after_image.datamosh.pipeline
 | --- | --- | --- |
 | `CAMERA_INDEX` | `1` | `cv2.VideoCapture` のデバイス番号 |
 | `FRAME_WIDTH` / `FRAME_HEIGHT` | `1280` / `720` | キャプチャ解像度 |
-| `MODEL_PATH` | `models/yolov8n.pt` | YOLO モデルファイル |
+| `MODEL_PATH` | `models/yolov8n_ncnn_model`（無ければ `models/yolov8n.pt`） | YOLO モデルのパス。NCNN モデルのディレクトリがあれば自動で優先 |
 | `DEBUG` | 空 | `1` / `true` / `yes` でデバッグ表示有効 |
 | `EFFECT` | `plotter` (snapshot) / `multi` (multiclip) | 合成エフェクト |
 | `TRIGGER` | `distance` | snapshot の記録条件 |
@@ -168,6 +169,27 @@ cp .env.example .env             # 必要に応じて編集
 ```
 
 初回起動時に `models/yolov8n.pt`（約 6 MB）が自動ダウンロードされる。
+
+### 推論バックエンド（NCNN / torch）
+
+既定では `models/yolov8n_ncnn_model/` があればそれを優先的にロードし、**NCNN** で推論する。
+torch の CPU カーネルを通さないため、PyPI の torch ホイールが原因で発生する
+`Illegal instruction (core dumped)` を回避できる（Raspberry Pi など aarch64 ボードで頻発）。
+NCNN モデルが無い場合は `models/yolov8n.pt` を **torch** バックエンドでロードする。
+
+NCNN モデルはリポジトリに同梱済み。自分で再生成する場合は、torch が正常に動く
+マシン（Mac など）で次を実行する（生成物の `.param` / `.bin` は移植可能なので、
+そのまま Pi へコピーして使える）:
+
+```sh
+.venv/bin/python -c "from ultralytics import YOLO; YOLO('models/yolov8n.pt').export(format='ncnn')"
+# 生成された yolov8n_ncnn_model/ を models/ 配下へ配置
+```
+
+> 補足: ultralytics の NCNN エクスポートには `pnnx` が必要。`pnnx` の同梱バイナリは
+> ビルド時の OS より新しい macOS では動くが、**古い macOS では起動しない**ことがある
+> （`built for macOS X which is newer than running OS`）。その場合は
+> `pip install "pnnx==20240819"` のように、稼働 OS に合う古いバージョンへ下げる。
 
 ## 実行
 
